@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-import sys
+import asyncio
 from typing import Optional
 
 import typer
 from rich.console import Console
 from rich.table import Table
 
-from wiim_cli.device import connect, disconnect, find_devices, run
+from wiim_cli.device import connect, disconnect, find_devices
 
 app = typer.Typer(
     name="wiim",
@@ -20,11 +20,16 @@ console = Console()
 err_console = Console(stderr=True)
 
 
-def _resolve_host(host: str | None) -> str:
+def _run(coro):
+    """Run an async coroutine, handling event loop edge cases."""
+    return asyncio.run(coro)
+
+
+async def _resolve_host(host: str | None) -> str:
     """Return the host or auto-discover a single device."""
     if host:
         return host
-    devices = run(find_devices())
+    devices = await find_devices()
     if len(devices) == 0:
         err_console.print("[red]No WiiM devices found on the network.[/red]")
         raise typer.Exit(1)
@@ -36,6 +41,7 @@ def _resolve_host(host: str | None) -> str:
         for d in devices:
             err_console.print(f"  {d.host}  {d.name or '(unknown)'}")
         raise typer.Exit(1)
+    console.print(f"[dim]Auto-discovered: {devices[0].name or devices[0].host}[/dim]")
     return devices[0].host
 
 
@@ -48,28 +54,32 @@ def discover(
     timeout: int = typer.Option(5, help="SSDP discovery timeout in seconds."),
 ) -> None:
     """Discover WiiM devices on the local network."""
-    devices = run(find_devices(timeout=timeout))
-    if not devices:
-        console.print("[yellow]No devices found.[/yellow]")
-        raise typer.Exit(0)
 
-    table = Table(title="WiiM Devices")
-    table.add_column("Name", style="cyan")
-    table.add_column("Host", style="green")
-    table.add_column("Model")
-    table.add_column("Firmware")
-    table.add_column("UUID", style="dim")
+    async def _discover():
+        devices = await find_devices(timeout=timeout)
+        if not devices:
+            console.print("[yellow]No devices found.[/yellow]")
+            raise typer.Exit(0)
 
-    for d in devices:
-        table.add_row(
-            d.name or "—",
-            d.host,
-            d.model or "—",
-            d.firmware or "—",
-            d.uuid or "—",
-        )
+        table = Table(title="WiiM Devices")
+        table.add_column("Name", style="cyan")
+        table.add_column("Host", style="green")
+        table.add_column("Model")
+        table.add_column("Firmware")
+        table.add_column("UUID", style="dim")
 
-    console.print(table)
+        for d in devices:
+            table.add_row(
+                d.name or "—",
+                d.host,
+                d.model or "—",
+                d.firmware or "—",
+                d.uuid or "—",
+            )
+
+        console.print(table)
+
+    _run(_discover())
 
 
 # ---------------------------------------------------------------------------
@@ -83,7 +93,8 @@ def status(
     """Show the current playback status."""
 
     async def _status():
-        player = await connect(_resolve_host(host))
+        resolved = await _resolve_host(host)
+        player = await connect(resolved)
         try:
             table = Table(title=f"{player.name or player.host} — Status")
             table.add_column("Property", style="cyan")
@@ -115,7 +126,7 @@ def status(
         finally:
             await disconnect(player)
 
-    run(_status())
+    _run(_status())
 
 
 def _fmt_time(seconds: int) -> str:
@@ -137,14 +148,15 @@ def play(
     """Resume playback."""
 
     async def _play():
-        player = await connect(_resolve_host(host))
+        resolved = await _resolve_host(host)
+        player = await connect(resolved)
         try:
             await player.play()
             console.print("[green]▶ Playing[/green]")
         finally:
             await disconnect(player)
 
-    run(_play())
+    _run(_play())
 
 
 @app.command()
@@ -154,14 +166,15 @@ def pause(
     """Pause playback."""
 
     async def _pause():
-        player = await connect(_resolve_host(host))
+        resolved = await _resolve_host(host)
+        player = await connect(resolved)
         try:
             await player.pause()
             console.print("[yellow]⏸ Paused[/yellow]")
         finally:
             await disconnect(player)
 
-    run(_pause())
+    _run(_pause())
 
 
 @app.command()
@@ -171,14 +184,15 @@ def stop(
     """Stop playback."""
 
     async def _stop():
-        player = await connect(_resolve_host(host))
+        resolved = await _resolve_host(host)
+        player = await connect(resolved)
         try:
             await player.stop()
             console.print("[red]⏹ Stopped[/red]")
         finally:
             await disconnect(player)
 
-    run(_stop())
+    _run(_stop())
 
 
 @app.command(name="next")
@@ -188,14 +202,15 @@ def next_track(
     """Skip to the next track."""
 
     async def _next():
-        player = await connect(_resolve_host(host))
+        resolved = await _resolve_host(host)
+        player = await connect(resolved)
         try:
             await player.next_track()
             console.print("[green]⏭ Next track[/green]")
         finally:
             await disconnect(player)
 
-    run(_next())
+    _run(_next())
 
 
 @app.command(name="prev")
@@ -205,14 +220,15 @@ def prev_track(
     """Skip to the previous track."""
 
     async def _prev():
-        player = await connect(_resolve_host(host))
+        resolved = await _resolve_host(host)
+        player = await connect(resolved)
         try:
             await player.previous_track()
             console.print("[green]⏮ Previous track[/green]")
         finally:
             await disconnect(player)
 
-    run(_prev())
+    _run(_prev())
 
 
 # ---------------------------------------------------------------------------
@@ -227,7 +243,8 @@ def volume(
     """Get or set the volume (0-100)."""
 
     async def _volume():
-        player = await connect(_resolve_host(host))
+        resolved = await _resolve_host(host)
+        player = await connect(resolved)
         try:
             if level is None:
                 current = int((player.volume_level or 0) * 100)
@@ -239,7 +256,7 @@ def volume(
         finally:
             await disconnect(player)
 
-    run(_volume())
+    _run(_volume())
 
 
 @app.command()
@@ -249,14 +266,15 @@ def mute(
     """Mute the device."""
 
     async def _mute():
-        player = await connect(_resolve_host(host))
+        resolved = await _resolve_host(host)
+        player = await connect(resolved)
         try:
             await player.set_mute(True)
             console.print("[yellow]🔇 Muted[/yellow]")
         finally:
             await disconnect(player)
 
-    run(_mute())
+    _run(_mute())
 
 
 @app.command()
@@ -266,14 +284,15 @@ def unmute(
     """Unmute the device."""
 
     async def _unmute():
-        player = await connect(_resolve_host(host))
+        resolved = await _resolve_host(host)
+        player = await connect(resolved)
         try:
             await player.set_mute(False)
             console.print("[green]🔊 Unmuted[/green]")
         finally:
             await disconnect(player)
 
-    run(_unmute())
+    _run(_unmute())
 
 
 # ---------------------------------------------------------------------------
@@ -288,14 +307,15 @@ def play_url(
     """Play audio from a URL."""
 
     async def _play_url():
-        player = await connect(_resolve_host(host))
+        resolved = await _resolve_host(host)
+        player = await connect(resolved)
         try:
             await player.play_url(url)
             console.print(f"[green]▶ Playing URL:[/green] {url}")
         finally:
             await disconnect(player)
 
-    run(_play_url())
+    _run(_play_url())
 
 
 @app.command(name="play-preset")
@@ -306,14 +326,15 @@ def play_preset(
     """Play a saved preset by number."""
 
     async def _play_preset():
-        player = await connect(_resolve_host(host))
+        resolved = await _resolve_host(host)
+        player = await connect(resolved)
         try:
             await player.play_preset(preset)
             console.print(f"[green]▶ Playing preset {preset}[/green]")
         finally:
             await disconnect(player)
 
-    run(_play_preset())
+    _run(_play_preset())
 
 
 @app.command()
@@ -324,14 +345,15 @@ def seek(
     """Seek to a position in the current track."""
 
     async def _seek():
-        player = await connect(_resolve_host(host))
+        resolved = await _resolve_host(host)
+        player = await connect(resolved)
         try:
             await player.seek(position)
             console.print(f"[green]⏩ Seeked to {_fmt_time(position)}[/green]")
         finally:
             await disconnect(player)
 
-    run(_seek())
+    _run(_seek())
 
 
 @app.command()
@@ -342,7 +364,8 @@ def shuffle(
     """Enable or disable shuffle."""
 
     async def _shuffle():
-        player = await connect(_resolve_host(host))
+        resolved = await _resolve_host(host)
+        player = await connect(resolved)
         try:
             await player.set_shuffle(enabled)
             state = "on" if enabled else "off"
@@ -350,7 +373,7 @@ def shuffle(
         finally:
             await disconnect(player)
 
-    run(_shuffle())
+    _run(_shuffle())
 
 
 if __name__ == "__main__":
