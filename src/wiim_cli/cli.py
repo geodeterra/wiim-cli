@@ -9,7 +9,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from wiim_cli.device import connect, disconnect, find_devices
+from wiim_cli.device import connect, disconnect, find_devices, find_single_device
 
 app = typer.Typer(
     name="wiim",
@@ -29,20 +29,25 @@ async def _resolve_host(host: str | None) -> str:
     """Return the host or auto-discover a single device."""
     if host:
         return host
-    devices = await find_devices()
+
+    # Fast path: try cache first, then discovery
+    device = await find_single_device()
+    if device:
+        console.print(f"[dim]Using: {device.name or device.host}[/dim]")
+        return device.host
+
+    # Slow path: full discovery to show all devices
+    devices = await find_devices(timeout=3)
     if len(devices) == 0:
         err_console.print("[red]No WiiM devices found on the network.[/red]")
         raise typer.Exit(1)
-    if len(devices) > 1:
-        err_console.print(
-            f"[yellow]Multiple devices found ({len(devices)}). "
-            "Use --host to pick one:[/yellow]"
-        )
-        for d in devices:
-            err_console.print(f"  {d.host}  {d.name or '(unknown)'}")
-        raise typer.Exit(1)
-    console.print(f"[dim]Auto-discovered: {devices[0].name or devices[0].host}[/dim]")
-    return devices[0].host
+    err_console.print(
+        f"[yellow]Multiple devices found ({len(devices)}). "
+        "Use --host to pick one:[/yellow]"
+    )
+    for d in devices:
+        err_console.print(f"  {d.host}  {d.name or '(unknown)'}")
+    raise typer.Exit(1)
 
 
 # ---------------------------------------------------------------------------
@@ -149,7 +154,7 @@ def play(
 
     async def _play():
         resolved = await _resolve_host(host)
-        player = await connect(resolved)
+        player = await connect(resolved, refresh=False)
         try:
             await player.play()
             console.print("[green]▶ Playing[/green]")
@@ -167,7 +172,7 @@ def pause(
 
     async def _pause():
         resolved = await _resolve_host(host)
-        player = await connect(resolved)
+        player = await connect(resolved, refresh=False)
         try:
             await player.pause()
             console.print("[yellow]⏸ Paused[/yellow]")
@@ -185,7 +190,7 @@ def stop(
 
     async def _stop():
         resolved = await _resolve_host(host)
-        player = await connect(resolved)
+        player = await connect(resolved, refresh=False)
         try:
             await player.stop()
             console.print("[red]⏹ Stopped[/red]")
@@ -203,7 +208,7 @@ def next_track(
 
     async def _next():
         resolved = await _resolve_host(host)
-        player = await connect(resolved)
+        player = await connect(resolved, refresh=False)
         try:
             await player.next_track()
             console.print("[green]⏭ Next track[/green]")
@@ -221,7 +226,7 @@ def prev_track(
 
     async def _prev():
         resolved = await _resolve_host(host)
-        player = await connect(resolved)
+        player = await connect(resolved, refresh=False)
         try:
             await player.previous_track()
             console.print("[green]⏮ Previous track[/green]")
@@ -244,7 +249,8 @@ def volume(
 
     async def _volume():
         resolved = await _resolve_host(host)
-        player = await connect(resolved)
+        needs_read = level is None
+        player = await connect(resolved, refresh=needs_read)
         try:
             if level is None:
                 current = int((player.volume_level or 0) * 100)
@@ -267,7 +273,7 @@ def mute(
 
     async def _mute():
         resolved = await _resolve_host(host)
-        player = await connect(resolved)
+        player = await connect(resolved, refresh=False)
         try:
             await player.set_mute(True)
             console.print("[yellow]🔇 Muted[/yellow]")
@@ -285,7 +291,7 @@ def unmute(
 
     async def _unmute():
         resolved = await _resolve_host(host)
-        player = await connect(resolved)
+        player = await connect(resolved, refresh=False)
         try:
             await player.set_mute(False)
             console.print("[green]🔊 Unmuted[/green]")
@@ -308,7 +314,7 @@ def play_url(
 
     async def _play_url():
         resolved = await _resolve_host(host)
-        player = await connect(resolved)
+        player = await connect(resolved, refresh=False)
         try:
             await player.play_url(url)
             console.print(f"[green]▶ Playing URL:[/green] {url}")
@@ -327,7 +333,7 @@ def play_preset(
 
     async def _play_preset():
         resolved = await _resolve_host(host)
-        player = await connect(resolved)
+        player = await connect(resolved, refresh=False)
         try:
             await player.play_preset(preset)
             console.print(f"[green]▶ Playing preset {preset}[/green]")
@@ -346,7 +352,7 @@ def seek(
 
     async def _seek():
         resolved = await _resolve_host(host)
-        player = await connect(resolved)
+        player = await connect(resolved, refresh=False)
         try:
             await player.seek(position)
             console.print(f"[green]⏩ Seeked to {_fmt_time(position)}[/green]")
@@ -365,7 +371,7 @@ def shuffle(
 
     async def _shuffle():
         resolved = await _resolve_host(host)
-        player = await connect(resolved)
+        player = await connect(resolved, refresh=False)
         try:
             await player.set_shuffle(enabled)
             state = "on" if enabled else "off"
